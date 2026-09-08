@@ -35,6 +35,7 @@ enum MotionSource {
 /// the whole point, so do not "helpfully" add them to the map.
 class AuraSettings {
   const AuraSettings({
+    this.setupComplete = false,
     this.startUrl = 'http://homeassistant.local:8123',
     this.userAgent,
     this.allowInsecureSsl = false,
@@ -77,6 +78,17 @@ class AuraSettings {
     this.deviceName = 'Aura Display',
     this.adminPin = '1234',
   });
+
+  // --- First run ----------------------------------------------------------
+
+  /// False until an operator has confirmed the dashboard URL on the setup
+  /// screen.
+  ///
+  /// The root widget boots into setup while this is false. Without it a fresh
+  /// install lands straight on a failed load of the placeholder [startUrl]
+  /// with no visible way out, because the admin hotspot is deliberately
+  /// undiscoverable.
+  final bool setupComplete;
 
   // --- WebView ------------------------------------------------------------
   final String startUrl;
@@ -149,7 +161,27 @@ class AuraSettings {
 
   bool get mqttConfigured => mqttEnabled && mqttHost.trim().isNotEmpty;
 
+  /// Turns what an operator actually types into a URL the WebView can load,
+  /// or null when there is nothing usable.
+  ///
+  /// A bare host - "homeassistant.local:8123", which is how everyone writes
+  /// it - has no scheme, and `WebUri` treats a scheme-less string as a
+  /// relative path and fails to load it. Returning null lets the caller
+  /// refuse to save instead of stranding the panel on a blank page.
+  static String? normalizeStartUrl(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+
+    // A scheme-less "host:8123" parses with 'host' as the *scheme*, so sniff
+    // for the separator rather than trusting Uri to spot the omission.
+    final Uri? uri = Uri.tryParse(trimmed.contains('://') ? trimmed : 'http://$trimmed');
+    if (uri == null || uri.host.isEmpty) return null;
+    if (uri.scheme != 'http' && uri.scheme != 'https') return null;
+    return uri.toString();
+  }
+
   AuraSettings copyWith({
+    bool? setupComplete,
     String? startUrl,
     String? userAgent,
     bool? allowInsecureSsl,
@@ -193,6 +225,7 @@ class AuraSettings {
     String? adminPin,
   }) {
     return AuraSettings(
+      setupComplete: setupComplete ?? this.setupComplete,
       startUrl: startUrl ?? this.startUrl,
       userAgent: userAgent ?? this.userAgent,
       allowInsecureSsl: allowInsecureSsl ?? this.allowInsecureSsl,
@@ -242,6 +275,7 @@ class AuraSettings {
 
   /// Persisted shape. Secrets are excluded on purpose - see the class doc.
   Map<String, dynamic> toJson() => <String, dynamic>{
+        'setupComplete': setupComplete,
         'startUrl': startUrl,
         'userAgent': userAgent,
         'allowInsecureSsl': allowInsecureSsl,
@@ -291,6 +325,11 @@ class AuraSettings {
 
     const defaults = AuraSettings();
     return AuraSettings(
+      // A blob written before setupComplete existed belongs to an install that
+      // was already configured by hand - there was no setup screen to skip.
+      // Treat any persisted blob as configured so an upgrade does not drop a
+      // working wall panel back into setup.
+      setupComplete: pick('setupComplete', json.containsKey('startUrl')),
       startUrl: pick('startUrl', defaults.startUrl),
       userAgent: json['userAgent'] as String?,
       allowInsecureSsl: pick('allowInsecureSsl', defaults.allowInsecureSsl),

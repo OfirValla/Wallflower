@@ -132,7 +132,20 @@ Get one from https://adoptium.net/temurin/releases/?version=17.
 $env:JAVA_HOME = $javaHome
 
 # The project compiles at source/target 17, so anything older cannot work.
-$javaVersionLine = (& (Join-Path $javaHome 'bin\java.exe') -version 2>&1 | Select-Object -First 1) -as [string]
+# `java -version` writes to stderr, and Windows PowerShell wraps a native
+# command's redirected stderr in ErrorRecords -- which the script-wide
+# $ErrorActionPreference = 'Stop' then promotes to a terminating error, so the
+# check has to drop to 'Continue' and stringify whatever comes back.
+$javaVersionLine   = $null
+$previousErrorPref = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    $javaVersionLine = & (Join-Path $javaHome 'bin\java.exe') -version 2>&1 |
+        ForEach-Object { $_.ToString() } |
+        Select-Object -First 1
+} finally {
+    $ErrorActionPreference = $previousErrorPref
+}
 if ($javaVersionLine -match '"(\d+)') {
     $javaMajor = [int]$Matches[1]
     if ($javaMajor -lt 17) {

@@ -6,14 +6,24 @@ import '../../domain/models/aura_settings.dart';
 import '../../integration/mqtt/mqtt_manager.dart';
 import '../../providers.dart';
 
-/// Full-screen configuration surface, gated behind the admin PIN.
+/// Full-screen configuration surface, gated behind the admin PIN - except on
+/// first run, where it *is* the app until a dashboard URL exists. See
+/// [AdminPage.firstRun].
 ///
-/// Rendered inside the kiosk [Stack] rather than pushed as a route, because a
-/// Navigator route can be popped by a stray BACK and would then leave the
-/// dashboard showing a half-torn transition. A widget in the stack is either
-/// there or it is not.
+/// In kiosk mode it is rendered inside the kiosk [Stack] rather than pushed as
+/// a route, because a Navigator route can be popped by a stray BACK and would
+/// then leave the dashboard showing a half-torn transition. A widget in the
+/// stack is either there or it is not.
 class AdminPage extends ConsumerStatefulWidget {
-  const AdminPage({super.key});
+  const AdminPage({super.key, this.firstRun = false});
+
+  /// Render as first-run setup instead of as the in-kiosk admin overlay.
+  ///
+  /// Three differences: no PIN gate (the only PIN that exists is the factory
+  /// default, so gating on it protects nothing and just blocks the operator),
+  /// no control that needs a live kiosk, and [AuraSettings.setupComplete] is
+  /// committed on save so the root widget hands over to the dashboard.
+  final bool firstRun;
 
   @override
   ConsumerState<AdminPage> createState() => _AdminPageState();
@@ -27,8 +37,8 @@ class _AdminPageState extends ConsumerState<AdminPage> {
     return Material(
       color: const Color(0xFF0B1220),
       child: SafeArea(
-        child: _unlocked
-            ? _AdminForm(onClose: _close)
+        child: _unlocked || widget.firstRun
+            ? _AdminForm(onClose: _close, firstRun: widget.firstRun)
             : _PinGate(
                 expected: ref.read(settingsControllerProvider).adminPin,
                 onUnlocked: () => setState(() => _unlocked = true),
@@ -38,7 +48,13 @@ class _AdminPageState extends ConsumerState<AdminPage> {
     );
   }
 
-  void _close() => ref.read(kioskControllerProvider.notifier).hideAdmin();
+  void _close() {
+    // Reading the notifier *builds* the kiosk controller, which subscribes to
+    // native events. During setup there is no kiosk to hide and nothing to
+    // fall back to, so this is a no-op rather than a way to start one early.
+    if (widget.firstRun) return;
+    ref.read(kioskControllerProvider.notifier).hideAdmin();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,9 +156,10 @@ class _PinGateState extends State<_PinGate> {
 // ---------------------------------------------------------------------------
 
 class _AdminForm extends ConsumerStatefulWidget {
-  const _AdminForm({required this.onClose});
+  const _AdminForm({required this.onClose, required this.firstRun});
 
   final VoidCallback onClose;
+  final bool firstRun;
 
   @override
   ConsumerState<_AdminForm> createState() => _AdminFormState();
@@ -151,6 +168,11 @@ class _AdminForm extends ConsumerStatefulWidget {
 class _AdminFormState extends ConsumerState<_AdminForm> {
   late AuraSettings _draft;
   final Map<String, TextEditingController> _text = <String, TextEditingController>{};
+
+  /// Set when [_save] rejects the typed start URL. A kiosk saved with an
+  /// unloadable URL shows a black screen and no explanation, so this is a hard
+  /// block on saving rather than a warning.
+  String? _startUrlError;
 
   @override
   void initState() {
@@ -172,8 +194,35 @@ class _AdminFormState extends ConsumerState<_AdminForm> {
       _text.putIfAbsent(key, () => TextEditingController(text: initial));
 
   Future<void> _save() async {
+    final String? normalized = AuraSettings.normalizeStartUrl(_draft.startUrl);
+    if (normalized == null) {
+      setState(() {
+        _startUrlError =
+            'Enter the dashboard address, e.g. homeassistant.local:8123';
+      });
+      return;
+    }
+
+    // Show the operator what was actually stored: typing "homeassistant.local"
+    // and having it silently become an http:// URL is confusing when they come
+    // back to this screen later.
+    if (normalized != _draft.startUrl) {
+      _controllerFor('startUrl', normalized).text = normalized;
+    }
+    setState(() => _startUrlError = null);
+
+    // An explicit save from this screen *is* the confirmation that the URL has
+    // been chosen, which is exactly what setupComplete records. Setting it on
+    // every save (not just the first run) keeps it idempotent and repairs the
+    // flag if a settings blob predates it.
+    _draft = _draft.copyWith(startUrl: normalized, setupComplete: true);
     await ref.read(settingsControllerProvider.notifier).replace(_draft);
     if (!mounted) return;
+
+    // On first run the root widget swaps this screen out for the dashboard,
+    // and there is no Scaffold here to host a SnackBar anyway - the handover
+    // is its own feedback.
+    if (widget.firstRun) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Settings saved')),
     );
@@ -181,8 +230,13 @@ class _AdminFormState extends ConsumerState<_AdminForm> {
 
   @override
   Widget build(BuildContext context) {
-    final kiosk = ref.watch(kioskControllerProvider);
-    final bridge = ref.read(homeAssistantBridgeProvider);
+    // Both of these build real machinery on first read: the kiosk controller
+    // subscribes to native events and connectivity, the bridge registers
+    // settings listeners. On first run there is no kiosk yet, so leave them
+    // alone instead of starting them behind the operator's back.
+    final kiosk = widget.firstRun ? null : ref.watch(kioskControllerProvider);
+    final bridge =
+        widget.firstRun ? null : ref.read(homeAssistantBridgeProvider);
 
     return Theme(
       data: ThemeData.dark(useMaterial3: true).copyWith(
@@ -190,16 +244,23 @@ class _AdminFormState extends ConsumerState<_AdminForm> {
       ),
       child: Column(
         children: <Widget>[
-          _Header(onClose: widget.onClose, onSave: _save),
+          _Header(
+            onClose: widget.onClose,
+            onSave: _save,
+            firstRun: widget.firstRun,
+          ),
           Expanded(
             child: ListView(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
               children: <Widget>[
+                if (widget.firstRun) const _FirstRunIntro(),
                 _section('Dashboard'),
                 _textField(
                   key: 'startUrl',
-                  label: 'Start URL',
+                  label: 'Start URL - the dashboard this panel pins to',
                   value: _draft.startUrl,
+                  keyboardType: TextInputType.url,
+                  errorText: _startUrlError,
                   onChanged: (v) => _draft = _draft.copyWith(startUrl: v),
                 ),
                 _textField(
@@ -399,10 +460,12 @@ class _AdminFormState extends ConsumerState<_AdminForm> {
                   onChanged: (v) =>
                       _draft = _draft.copyWith(telemetryIntervalSeconds: v),
                 ),
-                _statusRow('MQTT link', bridge.mqttState.name,
-                    ok: bridge.mqttState == MqttLinkState.connected),
-                if (bridge.mqttError != null)
-                  _statusRow('MQTT error', bridge.mqttError!, ok: false),
+                if (bridge != null) ...<Widget>[
+                  _statusRow('MQTT link', bridge.mqttState.name,
+                      ok: bridge.mqttState == MqttLinkState.connected),
+                  if (bridge.mqttError != null)
+                    _statusRow('MQTT error', bridge.mqttError!, ok: false),
+                ],
 
                 _section('Home Assistant - local REST API'),
                 _switch(
@@ -416,11 +479,12 @@ class _AdminFormState extends ConsumerState<_AdminForm> {
                   value: _draft.restPort,
                   onChanged: (v) => _draft = _draft.copyWith(restPort: v),
                 ),
-                _statusRow(
-                  'Listening',
-                  bridge.restRunning ? 'yes (:${_draft.restPort})' : 'no',
-                  ok: bridge.restRunning,
-                ),
+                if (bridge != null)
+                  _statusRow(
+                    'Listening',
+                    bridge.restRunning ? 'yes (:${_draft.restPort})' : 'no',
+                    ok: bridge.restRunning,
+                  ),
 
                 _section('Identity & admin'),
                 _textField(
@@ -437,28 +501,53 @@ class _AdminFormState extends ConsumerState<_AdminForm> {
                   onChanged: (v) => _draft = _draft.copyWith(adminPin: v),
                 ),
 
-                _section('Diagnostics'),
-                _statusRow('Device Owner', _yesNo(kiosk.isDeviceOwner),
-                    ok: kiosk.isDeviceOwner),
-                _statusRow('Lock Task active', _yesNo(kiosk.kioskLocked),
-                    ok: kiosk.kioskLocked),
-                _statusRow(
-                  'Overlay permission',
-                  _yesNo(kiosk.nativeStatus['canDrawOverlays'] == true),
-                  ok: kiosk.nativeStatus['canDrawOverlays'] == true,
-                ),
-                _statusRow(
-                  'Camera analysis',
-                  _yesNo(kiosk.nativeStatus['cameraRunning'] == true),
-                  ok: kiosk.nativeStatus['cameraRunning'] == true,
-                ),
-                if (kiosk.nativeStatus['lastError'] != null)
+                // Everything below reports live kiosk/native state, which
+                // only exists once the dashboard is running.
+                if (kiosk != null) ...<Widget>[
+                  _section('Diagnostics'),
+                  _statusRow('Device Owner', _yesNo(kiosk.isDeviceOwner),
+                      ok: kiosk.isDeviceOwner),
+                  _statusRow('Lock Task active', _yesNo(kiosk.kioskLocked),
+                      ok: kiosk.kioskLocked),
+                  // Device lock needs an active device admin. Without one
+                  // lockNow() is refused and the screen-off silently becomes a
+                  // dim, which is worth saying out loud rather than leaving an
+                  // operator to wonder why "real panel off" does nothing.
+                  if (kiosk.nativeStatus['screenOffModeDegraded'] == true)
+                    _statusRow(
+                      'Screen-off mode',
+                      'device lock denied - dimming instead',
+                      ok: false,
+                    ),
+                  // The configured level and the level actually pushed to the
+                  // panel. They differ while the display sleeps, which is
+                  // correct; a lit display sitting at backlight 0 is the
+                  // grey-dashboard failure.
                   _statusRow(
-                    'Motion error',
-                    '${kiosk.nativeStatus['lastError']}',
-                    ok: false,
+                    'Backlight',
+                    '${kiosk.nativeStatus['backlight'] ?? '?'} of '
+                        '${_draft.brightness} configured',
+                    ok: !kiosk.screenOn ||
+                        ((kiosk.nativeStatus['backlight'] as num?) ?? 0) > 0,
                   ),
-                _statusRow('Current URL', kiosk.currentUrl, ok: true),
+                  _statusRow(
+                    'Overlay permission',
+                    _yesNo(kiosk.nativeStatus['canDrawOverlays'] == true),
+                    ok: kiosk.nativeStatus['canDrawOverlays'] == true,
+                  ),
+                  _statusRow(
+                    'Camera analysis',
+                    _yesNo(kiosk.nativeStatus['cameraRunning'] == true),
+                    ok: kiosk.nativeStatus['cameraRunning'] == true,
+                  ),
+                  if (kiosk.nativeStatus['lastError'] != null)
+                    _statusRow(
+                      'Motion error',
+                      '${kiosk.nativeStatus['lastError']}',
+                      ok: false,
+                    ),
+                  _statusRow('Current URL', kiosk.currentUrl, ok: true),
+                ],
 
                 const SizedBox(height: 12),
                 Wrap(
@@ -491,23 +580,26 @@ class _AdminFormState extends ConsumerState<_AdminForm> {
                           .applyDeviceOwnerPolicies(),
                       child: const Text('Re-apply policies'),
                     ),
-                    OutlinedButton(
-                      onPressed: () =>
-                          ref.read(kioskControllerProvider.notifier).reload(
-                                clearCache: true,
-                              ),
-                      child: const Text('Clear cache & reload'),
-                    ),
-                    OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.orangeAccent,
+                    // Both need a running kiosk to act on.
+                    if (!widget.firstRun) ...<Widget>[
+                      OutlinedButton(
+                        onPressed: () =>
+                            ref.read(kioskControllerProvider.notifier).reload(
+                                  clearCache: true,
+                                ),
+                        child: const Text('Clear cache & reload'),
                       ),
-                      onPressed: () async {
-                        await ref.read(auraPlatformProvider).releaseKiosk();
-                        widget.onClose();
-                      },
-                      child: const Text('Exit kiosk (unlock)'),
-                    ),
+                      OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.orangeAccent,
+                        ),
+                        onPressed: () async {
+                          await ref.read(auraPlatformProvider).releaseKiosk();
+                          widget.onClose();
+                        },
+                        child: const Text('Exit kiosk (unlock)'),
+                      ),
+                    ],
                     OutlinedButton(
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.redAccent,
@@ -573,17 +665,21 @@ class _AdminFormState extends ConsumerState<_AdminForm> {
     required String value,
     required ValueChanged<String> onChanged,
     bool obscure = false,
+    String? errorText,
+    TextInputType? keyboardType,
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: TextField(
         controller: _controllerFor(key, value),
         obscureText: obscure,
+        keyboardType: keyboardType,
         autocorrect: false,
         enableSuggestions: false,
         style: const TextStyle(color: Colors.white),
         decoration: InputDecoration(
           labelText: label,
+          errorText: errorText,
           filled: true,
           fillColor: Colors.white10,
           border: const OutlineInputBorder(),
@@ -742,10 +838,15 @@ class _AdminFormState extends ConsumerState<_AdminForm> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.onClose, required this.onSave});
+  const _Header({
+    required this.onClose,
+    required this.onSave,
+    required this.firstRun,
+  });
 
   final VoidCallback onClose;
   final Future<void> Function() onSave;
+  final bool firstRun;
 
   @override
   Widget build(BuildContext context) {
@@ -756,20 +857,91 @@ class _Header extends StatelessWidget {
       ),
       child: Row(
         children: <Widget>[
-          const Icon(Icons.tune, color: Colors.white70),
+          Icon(
+            firstRun ? Icons.rocket_launch_outlined : Icons.tune,
+            color: Colors.white70,
+          ),
           const SizedBox(width: 12),
-          const Expanded(
+          Expanded(
             child: Text(
-              'Aura Display settings',
-              style: TextStyle(color: Colors.white, fontSize: 18),
+              firstRun ? 'Set up Aura Display' : 'Aura Display settings',
+              style: const TextStyle(color: Colors.white, fontSize: 18),
             ),
           ),
-          TextButton(onPressed: onClose, child: const Text('Close')),
-          const SizedBox(width: 8),
+          // Nothing to close back to during setup - the dashboard does not
+          // exist until this form is saved.
+          if (!firstRun) ...<Widget>[
+            TextButton(onPressed: onClose, child: const Text('Close')),
+            const SizedBox(width: 8),
+          ],
           FilledButton.icon(
             onPressed: onSave,
-            icon: const Icon(Icons.save_outlined, size: 18),
-            label: const Text('Save'),
+            icon: Icon(
+              firstRun ? Icons.play_arrow_rounded : Icons.save_outlined,
+              size: 18,
+            ),
+            label: Text(firstRun ? 'Save & start' : 'Save'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// First-run intro
+// ---------------------------------------------------------------------------
+
+/// Explains the one thing an operator cannot discover for themselves.
+///
+/// Once setup is saved this screen is only reachable through a deliberately
+/// invisible gesture, so the gesture and the default PIN are spelled out here
+/// - while there is still a visible screen to read them on.
+class _FirstRunIntro extends StatelessWidget {
+  const _FirstRunIntro();
+
+  static const Color _accent = Color(0xFF38BDF8);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _accent.withValues(alpha: 0.35)),
+      ),
+      child: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(Icons.info_outline, size: 18, color: _accent),
+              SizedBox(width: 10),
+              Text(
+                'Before you start',
+                style: TextStyle(
+                  color: _accent,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 12),
+          Text(
+            'Set the dashboard URL to pin below, then press Save & start. '
+            'Everything else can stay at its default and be changed later.',
+            style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.45),
+          ),
+          SizedBox(height: 10),
+          Text(
+            'To reopen this screen once the dashboard is running, tap the '
+            'top-left corner of the display four times within three seconds, '
+            'then enter the admin PIN. Change that PIN under Identity & admin '
+            'below - it defaults to 1234 and also acts as the REST API token.',
+            style: TextStyle(color: Colors.white54, fontSize: 12, height: 1.45),
           ),
         ],
       ),

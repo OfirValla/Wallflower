@@ -40,6 +40,11 @@ class MainActivity : FlutterActivity() {
     override fun onResume() {
         super.onResume()
         AuraCore.kiosk.applyWindowPolicy(this)
+        // applyWindowPolicy rewrites the window attributes, and a motion wake
+        // can have set the backlight while this Activity had no window to write
+        // to. Re-assert afterwards, or the dashboard comes back readable-in-
+        // theory under a panel still at its dimmest.
+        AuraCore.screen.reassertBacklight()
         // Legal here and only here: a foreground service with the `camera` type
         // must be started while an Activity is visible.
         AuraKioskService.start(this)
@@ -52,7 +57,12 @@ class MainActivity : FlutterActivity() {
      */
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) AuraCore.kiosk.applyImmersive(this)
+        if (!hasFocus) return
+        AuraCore.kiosk.applyImmersive(this)
+        // Cheap: a no-op unless the window has actually lost the brightness
+        // override. Regaining focus is the other moment an OEM window manager
+        // is known to drop it.
+        AuraCore.screen.reassertBacklight()
     }
 
     /** Feeds the display idle timer without Dart having to report every touch. */

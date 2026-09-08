@@ -82,9 +82,18 @@ Staying on AGP 8 keeps the legacy `android { }` DSL and `kotlinOptions` in
 for all three of these "soon"; moving to AGP 9 means adopting the new DSL,
 which is a separate change.
 
-Then, on the device: tap the **top-left corner four times** within three seconds
-and enter the PIN (`1234` by default) to open the admin panel. Set the start URL
-and — if you use MQTT — the broker details.
+### First launch
+
+The app opens its **setup screen** rather than a dashboard: enter the URL to
+pin, adjust anything else you need — motion wake, brightness, MQTT broker —
+then press **Save & start**. Every later launch boots straight to the
+dashboard, so a wall panel that reboots unattended never waits for a tap.
+
+Afterwards the same screen is the admin panel, reached by tapping the
+**top-left corner four times** within three seconds and entering the PIN
+(`1234` by default). It is also one tap from the banner that appears whenever
+the dashboard fails to load — the corner gesture is intentionally invisible,
+which is unhelpful precisely when the URL is wrong.
 
 ### Provisioning real kiosk mode
 

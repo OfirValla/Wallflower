@@ -58,34 +58,103 @@ class ScreenController(context: Context) {
 
     private var idleTimer: Runnable? = null
 
+    /**
+     * Last window brightness fraction successfully written, or NaN when
+     * unknown.
+     *
+     * Cleared whenever the Activity changes, because a fresh window starts at
+     * BRIGHTNESS_OVERRIDE_NONE no matter what the old one was showing. Without
+     * that reset, [reassertBacklight] would skip the write a recreated
+     * Activity actually needs.
+     */
+    @Volatile
+    private var appliedFraction: Float = Float.NaN
+
+    /**
+     * True once `lockNow()` has been refused, i.e. `deviceLock` mode is really
+     * running as `dim`. Sticky: the cause is a missing device-admin activation,
+     * which does not change without operator action.
+     */
+    @Volatile
+    private var lockNowDenied: Boolean = false
+
+    /**
+     * What the panel should be showing right now.
+     *
+     * [brightness] is the *configured* level and deliberately survives a
+     * sleep; this is the level to actually push. Deriving it in one place is
+     * what keeps the backlight and Flutter's black overlay from disagreeing,
+     * and a disagreement is visible as a grey, barely-readable dashboard.
+     */
+    private val desiredBacklight: Int get() = if (isScreenOn) brightness else 0
+
     // ---------------------------------------------------------------------
     // Wiring
     // ---------------------------------------------------------------------
 
     fun attach(activity: Activity) {
         activityRef = WeakReference(activity)
-        applyBrightness(brightness)
+        appliedFraction = Float.NaN
+        // desiredBacklight, not brightness: if the OS recreated the Activity
+        // while the display was logically asleep, lighting the panel to full
+        // here would leave a lit screen under Flutter's black overlay.
+        applyBrightness(desiredBacklight)
         rearmIdleTimer()
     }
 
     fun detach(activity: Activity) {
-        if (activityRef.get() === activity) activityRef = WeakReference(null)
+        if (activityRef.get() === activity) {
+            activityRef = WeakReference(null)
+            appliedFraction = Float.NaN
+        }
+    }
+
+    /**
+     * Re-push the backlight for the current state.
+     *
+     * Window brightness is written asynchronously on the main thread and can
+     * fail or be dropped: no window attached yet, an Activity recreated behind
+     * our back, an OEM window manager that resets the override. When that
+     * happens during [wake] the result is the worst of both layers - Dart has
+     * already been told the screen is on and has faded out its black overlay,
+     * while the panel is still at its dimmest. Called from the Activity on
+     * resume and on regaining focus, where a window is guaranteed to exist.
+     */
+    fun reassertBacklight() {
+        applyBrightness(desiredBacklight)
     }
 
     fun updateConfig(next: AuraConfig) {
         val brightnessChanged = next.brightness != config.brightness
         val timeoutChanged = next.screenTimeoutSeconds != config.screenTimeoutSeconds
         config = next
-        if (brightnessChanged && isScreenOn) setBrightness(next.brightness)
+        // Store the new level even while asleep. Guarding this on isScreenOn
+        // left `brightness` stale, so the next wake restored the *old* level:
+        // dim the panel while it sleeps and the next motion wake brought the
+        // previous brightness back.
+        if (brightnessChanged) setBrightness(next.brightness)
         if (timeoutChanged) rearmIdleTimer()
     }
 
     fun state(): Map<String, Any?> = mapOf(
         "screenOn" to isScreenOn,
+        // The configured level, which deliberately survives a sleep - Home
+        // Assistant's brightness entity should not read 0 just because the
+        // panel is dark.
         "brightness" to brightness,
+        // What the backlight is meant to be showing. Reported separately so a
+        // wake that failed to relight the panel shows up in diagnostics
+        // instead of being invisible.
+        "backlight" to desiredBacklight,
         // The OS view of things, which can differ from ours in `dim` mode.
         "interactive" to powerManager.isInteractive,
         "screenOffMode" to config.screenOffMode,
+        // deviceLock silently degrades to dimming when lockNow() is denied.
+        // Reporting the configured mode alone hid that for a long time, so
+        // report what is actually in force as well.
+        "screenOffModeDegraded" to (
+            config.screenOffMode == AuraConfig.MODE_DEVICE_LOCK && lockNowDenied
+            ),
         "canWriteSettings" to Settings.System.canWrite(appContext),
     )
 
@@ -103,9 +172,24 @@ class ScreenController(context: Context) {
         isScreenOn = true
         cancelIdleTimer()
 
-        when (config.screenOffMode) {
-            AuraConfig.MODE_DEVICE_LOCK -> if (!powerManager.isInteractive) forceDisplayOn()
-            else -> applyBrightness(brightness)
+        // Only a genuinely-off panel needs the wake-lock dance.
+        if (config.screenOffMode == AuraConfig.MODE_DEVICE_LOCK &&
+            !powerManager.isInteractive
+        ) {
+            forceDisplayOn()
+        }
+
+        // Then relight, in *every* mode. deviceLock is emphatically not exempt:
+        // sleep() falls back to dimming whenever lockNow() is denied - which is
+        // the norm, since it needs an active device admin - and the device then
+        // never leaves the interactive state, so the branch above does nothing
+        // and no other path puts the backlight back. The panel sits at its
+        // dimmest while Dart is told the screen is on and fades out its black
+        // overlay, which reads as a grey, barely-legible dashboard.
+        if (!applyBrightness(desiredBacklight)) {
+            // Dart is about to drop the overlay regardless, so say plainly that
+            // the panel was not relit. onResume/onWindowFocusChanged retries.
+            Log.w(TAG, "Woken with no window to relight - backlight deferred")
         }
 
         rearmIdleTimer()
@@ -124,13 +208,14 @@ class ScreenController(context: Context) {
             AuraConfig.MODE_DEVICE_LOCK -> {
                 // Requires an active device admin with the force-lock policy.
                 val ok = runCatching { dpm.lockNow() }.isSuccess
+                lockNowDenied = !ok
                 if (!ok) {
                     Log.w(TAG, "lockNow() denied - falling back to dim")
-                    applyBrightness(0)
+                    applyBrightness(desiredBacklight)
                 }
             }
 
-            else -> applyBrightness(0)
+            else -> applyBrightness(desiredBacklight)
         }
 
         Log.i(TAG, "Display slept ($reason)")
@@ -140,7 +225,9 @@ class ScreenController(context: Context) {
     /** @param value 0..255, matching Home Assistant's light brightness scale. */
     fun setBrightness(value: Int): Boolean {
         brightness = value.coerceIn(0, 255)
-        if (isScreenOn) applyBrightness(brightness)
+        // The derived level keeps a set-brightness-while-asleep from lighting
+        // the panel, without losing the value.
+        applyBrightness(desiredBacklight)
         AuraCore.emit(EVENT_SCREEN, state() + mapOf("reason" to "brightness"))
         return true
     }
@@ -158,23 +245,39 @@ class ScreenController(context: Context) {
     // Internals
     // ---------------------------------------------------------------------
 
-    private fun applyBrightness(value255: Int) {
+    /**
+     * @return false when there was no window to write to, i.e. the caller's
+     *     intent has *not* been carried out and needs re-asserting later. True
+     *     only means the write was dispatched; the main-thread write can still
+     *     fail, which leaves [appliedFraction] stale on purpose so the next
+     *     [reassertBacklight] retries it.
+     */
+    private fun applyBrightness(value255: Int): Boolean {
         if (config.useSystemBrightness && Settings.System.canWrite(appContext)) {
             applySystemBrightness(value255)
-            return
+            return true
         }
         // Window-scoped brightness needs no permission and is instant. It only
         // affects our window - which is fine, because in kiosk mode our window
         // is the only thing on screen.
+        //
+        // 0f is not "backlight off" for an ordinary app window
+        // (BRIGHTNESS_OVERRIDE_OFF is system-only), it is the dimmest the panel
+        // allows. What makes `dim` mode look off is Flutter's black overlay on
+        // top, which is exactly why the two have to stay in agreement.
         val fraction = if (value255 <= 0) 0f else (value255 / 255f).coerceIn(0.004f, 1f)
-        val act = activityRef.get() ?: return
+        val act = activityRef.get() ?: return false
+        if (fraction == appliedFraction) return true
+
         main.post {
             runCatching {
                 val attrs: WindowManager.LayoutParams = act.window.attributes
                 attrs.screenBrightness = fraction
                 act.window.attributes = attrs
+                appliedFraction = fraction
             }.onFailure { Log.w(TAG, "Window brightness failed", it) }
         }
+        return true
     }
 
     private fun applySystemBrightness(value255: Int) {
@@ -215,7 +318,7 @@ class ScreenController(context: Context) {
         }.onFailure { Log.w(TAG, "ACQUIRE_CAUSES_WAKEUP failed", it) }
 
         if (AuraCore.isInitialized) AuraCore.kiosk.bringToForeground()
-        applyBrightness(brightness)
+        applyBrightness(desiredBacklight)
     }
 
     private fun rearmIdleTimer() {

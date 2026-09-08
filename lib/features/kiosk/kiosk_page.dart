@@ -283,6 +283,13 @@ class _KioskPageState extends ConsumerState<KioskPage> {
     }
   }
 
+  /// Failure banner, with the one visible route into settings.
+  ///
+  /// The four-tap hotspot is deliberately undiscoverable, which is right until
+  /// the dashboard will not load: a mistyped URL or an unreachable host leaves
+  /// an operator in front of a black panel with no way in they could guess.
+  /// This button only appears while something is actually broken, and it still
+  /// goes through the PIN gate.
   Widget _buildStatusBanner(String? error, bool online) {
     final message = !online
         ? 'Network unavailable - retrying'
@@ -292,24 +299,36 @@ class _KioskPageState extends ConsumerState<KioskPage> {
       left: 0,
       right: 0,
       bottom: 0,
-      child: IgnorePointer(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          color: Colors.black.withValues(alpha: 0.72),
-          child: Row(
-            children: <Widget>[
-              const Icon(Icons.cloud_off, size: 16, color: Colors.white70),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  message,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
-                ),
+      // Not wrapped in IgnorePointer, unlike the other overlays - the button
+      // has to be tappable. Swallowing touches in this strip costs nothing
+      // while the page underneath is broken anyway.
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+        color: Colors.black.withValues(alpha: 0.72),
+        child: Row(
+          children: <Widget>[
+            const Icon(Icons.cloud_off, size: 16, color: Colors.white70),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                message,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),
-            ],
-          ),
+            ),
+            const SizedBox(width: 8),
+            TextButton.icon(
+              onPressed: () =>
+                  ref.read(kioskControllerProvider.notifier).showAdmin(),
+              icon: const Icon(Icons.tune, size: 16),
+              label: const Text('Settings'),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white,
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+          ],
         ),
       ),
     );
