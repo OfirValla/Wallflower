@@ -241,6 +241,22 @@ class ScreenController(context: Context) {
         }
     }
 
+    /**
+     * Presence, as distinct from touch: someone is in front of the panel.
+     *
+     * Pushes the idle timeout out so a display that woke on motion stays awake
+     * while they are still there. Without this the timeout counted down from
+     * the wake and slept the panel on schedule with someone standing in front
+     * of it - only touch fed the timer.
+     *
+     * Deliberately does *not* wake a sleeping display: that decision and its
+     * cooldown belong to MotionCoordinator, and calling this on a dark panel
+     * must stay free so presence can be reported unconditionally.
+     */
+    fun notePresence() {
+        if (isScreenOn) rearmIdleTimer()
+    }
+
     // ---------------------------------------------------------------------
     // Internals
     // ---------------------------------------------------------------------
@@ -321,18 +337,34 @@ class ScreenController(context: Context) {
         applyBrightness(desiredBacklight)
     }
 
-    private fun rearmIdleTimer() {
-        cancelIdleTimer()
+    private fun rearmIdleTimer() = onMain {
+        cancelIdleTimerOnMain()
         val seconds = config.screenTimeoutSeconds
-        if (seconds <= 0 || !isScreenOn) return
+        if (seconds <= 0 || !isScreenOn) return@onMain
         val task = Runnable { sleep("timeout") }
         idleTimer = task
         main.postDelayed(task, seconds * 1_000L)
     }
 
-    private fun cancelIdleTimer() {
+    private fun cancelIdleTimer() = onMain { cancelIdleTimerOnMain() }
+
+    private fun cancelIdleTimerOnMain() {
         idleTimer?.let { main.removeCallbacks(it) }
         idleTimer = null
+    }
+
+    /**
+     * Runs [block] on the main thread, inline if already there.
+     *
+     * [idleTimer] is now touched from three threads - the method channel, the
+     * Activity, and the camera analysis thread through [notePresence] at up to
+     * the analysis frame rate. Confining every mutation to one thread is what
+     * stops a rearm and a cancel from interleaving and leaking a pending
+     * `sleep` that fires while someone is still in the room. Posting also keeps
+     * ordering: same handler, so a cancel issued before a rearm runs before it.
+     */
+    private fun onMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post { block() }
     }
 
     private companion object {

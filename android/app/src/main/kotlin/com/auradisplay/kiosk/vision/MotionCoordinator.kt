@@ -169,12 +169,21 @@ class MotionCoordinator(context: Context) {
         isMotionActive = true
         scheduleClear(cfg.motionClearAfterMs)
 
-        // Wake first, report second. Cooldown rate-limits the wake, not the
-        // detection, so a busy room does not thrash the backlight.
-        if (cfg.wakeOnMotion && now - lastWakeAt >= cfg.motionCooldownMs) {
-            lastWakeAt = now
-            if (AuraCore.isInitialized && !AuraCore.screen.isScreenOn) {
-                AuraCore.screen.wake("motion:$source")
+        if (cfg.wakeOnMotion && AuraCore.isInitialized) {
+            // Keep an already-lit display awake. Outside the cooldown on
+            // purpose: the cooldown exists to stop a busy room thrashing the
+            // backlight, and must not also decide how long the panel stays up.
+            // Inside it, a cooldown longer than screenTimeoutSeconds would let
+            // the display sleep with someone standing in front of it.
+            AuraCore.screen.notePresence()
+
+            // Wake first, report second. Cooldown rate-limits the wake, not the
+            // detection, so a busy room does not thrash the backlight.
+            if (now - lastWakeAt >= cfg.motionCooldownMs) {
+                lastWakeAt = now
+                if (!AuraCore.screen.isScreenOn) {
+                    AuraCore.screen.wake("motion:$source")
+                }
             }
         }
 
