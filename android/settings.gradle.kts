@@ -20,8 +20,14 @@ plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
     // Bump these two with the Android Studio upgrade assistant; they are the
     // only hard-pinned toolchain versions in the project.
-    id("com.android.application") version "8.7.3" apply false
-    id("org.jetbrains.kotlin.android") version "2.1.0" apply false
+    //
+    // Floors are set by Flutter, not by us: DependencyVersionChecker in the
+    // Flutter Gradle plugin hard-fails the build below AGP 8.11.1, Kotlin
+    // 2.2.20, Gradle 8.14.0 (see gradle/wrapper) or Java 17. Staying on AGP 8
+    // keeps the legacy `android { }` DSL and `kotlinOptions` in app/ valid;
+    // moving to AGP 9 means adopting the new DSL as well.
+    id("com.android.application") version "8.11.1" apply false
+    id("org.jetbrains.kotlin.android") version "2.2.20" apply false
 }
 
 include(":app")

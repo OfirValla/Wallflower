@@ -160,7 +160,7 @@ class _KioskPageState extends ConsumerState<KioskPage> {
         builtInZoomControls: false,
         displayZoomControls: false,
         disableContextMenu: true,
-        disableLongPressContextMenu: true,
+        disableLongPressContextMenuOnLinks: true,
         verticalScrollBarEnabled: false,
         horizontalScrollBarEnabled: false,
         overScrollMode: OverScrollMode.NEVER,
