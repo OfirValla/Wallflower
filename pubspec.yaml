@@ -1,0 +1,57 @@
+name: aura_display
+description: >
+  Aura Display - an open-source, high-performance kiosk browser and device
+  management app for Android. Turns wall-mounted tablets into always-on,
+  locked-down smart home dashboards with two-way Home Assistant control.
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  # 3.27 is the floor for Color.withValues(); Dart 3.6 for the sealed-class
+  # exhaustive switches in RemoteCommand.
+  sdk: ">=3.6.0 <4.0.0"
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # --- State management (Clean Architecture / MVVM presentation layer) -------
+  flutter_riverpod: ^2.6.1
+
+  # --- WebView engine -------------------------------------------------------
+  # flutter_inappwebview is chosen over webview_flutter because it exposes the
+  # three APIs this project cannot live without:
+  #   * onReceivedServerTrustAuthRequest -> opt-in self-signed SSL bypass
+  #   * onRenderProcessGone             -> WebView crash recovery
+  #   * addJavaScriptHandler            -> JS bridge for dashboard -> app calls
+  flutter_inappwebview: ^6.1.5
+
+  # --- Home Assistant integration -------------------------------------------
+  mqtt_client: ^10.7.0
+  shelf: ^1.4.2
+  shelf_router: ^1.1.4
+
+  # --- Persistence ----------------------------------------------------------
+  shared_preferences: ^2.3.5
+  flutter_secure_storage: ^9.2.4
+
+  # --- Device telemetry / platform helpers ----------------------------------
+  battery_plus: ^6.2.1
+  connectivity_plus: ^6.1.3
+  device_info_plus: ^11.3.0
+  package_info_plus: ^8.3.0
+  network_info_plus: ^6.1.3
+  permission_handler: ^11.4.0
+
+  # --- Audio / speech (play_audio command) ----------------------------------
+  flutter_tts: ^4.2.0
+  audioplayers: ^6.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

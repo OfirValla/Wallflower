@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder mark: a display panel with a radiating "aura". Replace with a
+     proper adaptive icon (mipmap-anydpi-v26/ic_launcher.xml) before release. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#0B1220"
+        android:pathData="M0,0h108v108H0z" />
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M30,34h48a4,4 0 0 1 4,4v26a4,4 0 0 1 -4,4H30a4,4 0 0 1 -4,-4V38a4,4 0 0 1 4,-4zM48,74h12v4H48z" />
+    <path
+        android:fillColor="#0EA5E9"
+        android:fillAlpha="0.45"
+        android:pathData="M54,16a38,38 0 0 1 26.87,11.13l-4.24,4.24A32,32 0 0 0 54,22zM54,92a38,38 0 0 1 -26.87,-11.13l4.24,-4.24A32,32 0 0 0 54,86z" />
+</vector>

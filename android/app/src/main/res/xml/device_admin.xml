@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Deliberately minimal. Aura only needs the policies that back a kiosk:
+
+    force-lock                -> DevicePolicyManager.lockNow(), the "real"
+                                 screen-off path used by ScreenOffMode.deviceLock
+    disable-keyguard-features -> suppress the lock screen so a motion wake-up
+                                 lands straight on the dashboard
+    watch-login               -> lets the app log failed unlock attempts on a
+                                 shared/public display (audit only)
+
+  wipe-data and reset-password are intentionally NOT requested: an operator
+  should never have to grant a signage app the ability to factory-reset the
+  tablet. Device Owner mode grants the rest (Lock Task, status bar, permission
+  auto-grant) without extra policy declarations.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <force-lock />
+        <disable-keyguard-features />
+        <watch-login />
+    </uses-policies>
+</device-admin>

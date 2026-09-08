@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Local-network posture. Two deliberate choices:
+
+  1. cleartextTrafficPermitted="true" - a huge share of Home Assistant and
+     ESPHome installs are plain http:// on a private VLAN. Blocking that would
+     make the app useless for its primary audience.
+
+  2. <certificates src="user" /> - trusts CAs the operator installed on the
+     device. This is the CORRECT way to accept a self-signed local HA cert:
+     install the CA once, and TLS validation still works. The in-app
+     "allow insecure SSL" switch (AuraSettings.allowInsecureSsl) bypasses
+     validation entirely and is the last resort - it is off by default and the
+     admin panel warns about it.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

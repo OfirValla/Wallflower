@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- ==================================================================
+         NETWORK  -  dashboard loading, MQTT, local REST control API
+         ================================================================== -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- network_info_plus: shows the device LAN IP in the admin panel so the
+         operator knows where the local REST API is reachable. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Required on API 29+ for network_info_plus to return the SSID/IP. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- ==================================================================
+         MOTION ENGINE  -  front camera frame differencing + ambient sensors
+         ================================================================== -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Ambient light sampling above the default 200 Hz cap is never needed,
+         but some OEM light sensors are gated behind this on API 31+. -->
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+
+    <!-- ==================================================================
+         POWER / DISPLAY
+         ================================================================== -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
+    <!-- Optional. Only needed if the operator opts into SYSTEM brightness
+         control instead of window-scoped brightness. Must be granted by the
+         user through Settings.ACTION_MANAGE_WRITE_SETTINGS - it cannot be
+         granted at install time, and it cannot be granted by a Device Owner. -->
+    <uses-permission
+        android:name="android.permission.WRITE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- ==================================================================
+         KIOSK LOCKDOWN
+         ================================================================== -->
+    <!-- Draws the 1-2 dp touch shield over the status bar region on devices
+         where the app is NOT Device Owner. Granted via
+         Settings.ACTION_MANAGE_OVERLAY_PERMISSION, or pre-granted with
+         `adb shell appops set com.auradisplay.kiosk SYSTEM_ALERT_WINDOW allow`. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- bring_to_foreground remote command. -->
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- ==================================================================
+         FOREGROUND SERVICE
+         The service holds the wake lock, owns the CameraX motion pipeline and
+         keeps the process at foreground priority so the OS never freezes the
+         MQTT socket or the WebView timers.
+         ================================================================== -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- API 34+ requires one permission per declared foregroundServiceType. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- ==================================================================
+         HARDWARE  -  all optional so the APK installs on camera-less signage
+         ================================================================== -->
+    <uses-feature
+        android:name="android.hardware.camera.any"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera.front"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.sensor.light"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+
+    <!-- Package visibility (API 30+): lets flutter_tts enumerate the installed
+         speech engines for the play_audio command. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
+    <application
+        android:name="${applicationName}"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:hardwareAccelerated="true"
+        android:icon="@drawable/ic_aura"
+        android:label="Aura Display"
+        android:largeHeap="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true">
+
+        <!-- ==============================================================
+             KIOSK ACTIVITY
+             * singleInstance  - one task ever, so bring_to_foreground and
+                                 Lock Task can never stack a second copy.
+             * HOME + DEFAULT  - makes Aura selectable as the launcher, which
+                                 is what neutralises the HOME key and gives a
+                                 free auto-start at boot. A Device Owner can
+                                 also pin this with addPersistentPreferredActivity.
+             * lockTaskMode    - "if_whitelisted" lets the Device Owner start
+                                 Lock Task with no user confirmation dialog.
+             * showWhenLocked / turnScreenOn - lets a motion wake-up land
+                                 directly on the dashboard, past the keyguard.
+             ============================================================== -->
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density|smallestScreenSize|fontScale|locale|layoutDirection"
+            android:exported="true"
+            android:hardwareAccelerated="true"
+            android:launchMode="singleInstance"
+            android:lockTaskMode="if_whitelisted"
+            android:resizeableActivity="false"
+            android:screenOrientation="unspecified"
+            android:showWhenLocked="true"
+            android:theme="@style/LaunchTheme"
+            android:turnScreenOn="true"
+            android:windowSoftInputMode="adjustResize"
+            tools:targetApi="27">
+
+            <!-- Swap the launch theme for the app theme as soon as the Flutter
+                 engine has drawn its first frame (avoids a white flash). -->
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme" />
+
+            <!-- On older tablets with flaky Vulkan drivers, an Impeller
+                 regression shows up as a black or torn WebView. Uncomment to
+                 fall back to the Skia renderer.
+            <meta-data
+                android:name="io.flutter.embedding.android.EnableImpeller"
+                android:value="false" /> -->
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Optional but recommended for wall-mounted units: select Aura as
+                 the device Home app so the HOME key is a no-op. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+
+        <!-- ==============================================================
+             ALWAYS-ON SERVICE
+             `camera` is required for the motion engine to keep analysing
+             frames while the display is off. It is only requested when motion
+             detection is actually enabled - see AuraKioskService.
+             ============================================================== -->
+        <service
+            android:name=".service.AuraKioskService"
+            android:exported="false"
+            android:foregroundServiceType="camera|specialUse"
+            tools:targetApi="34">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Always-on wall-mounted kiosk display: holds the
+                    display wake lock, keeps the dashboard rendered, streams
+                    device telemetry to the local MQTT broker and serves the
+                    on-device control API." />
+        </service>
+
+        <!-- ==============================================================
+             DEVICE ADMIN / DEVICE OWNER RECEIVER
+             Enables lockNow(), Lock Task whitelisting, setStatusBarDisabled(),
+             keyguard suppression and runtime-permission auto-grant.
+             Provision with (device must have no accounts):
+               adb shell dpm set-device-owner \
+                 com.auradisplay.kiosk/.kiosk.AuraDeviceAdminReceiver
+             ============================================================== -->
+        <receiver
+            android:name=".kiosk.AuraDeviceAdminReceiver"
+            android:description="@string/device_admin_description"
+            android:exported="true"
+            android:label="@string/device_admin_label"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+                <action android:name="android.app.action.PROFILE_PROVISIONING_COMPLETE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- ==============================================================
+             BOOT RECEIVER
+             Launches the kiosk activity after a power cut. Note that we start
+             the ACTIVITY, not the service: on Android 15+ starting a
+             camera-type foreground service from BOOT_COMPLETED throws
+             ForegroundServiceStartNotAllowedException. The activity starts the
+             service once it is visible, which is always allowed.
+             ============================================================== -->
+        <receiver
+            android:name=".service.BootReceiver"
+            android:directBootAware="false"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

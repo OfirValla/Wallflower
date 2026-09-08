@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Aura Display</string>
+    <string name="device_admin_label">Aura Display Kiosk</string>
+    <string name="device_admin_description">Allows Aura Display to lock the screen, suppress the lock screen and keep the dashboard pinned to the foreground.</string>
+    <string name="service_channel_name">Kiosk display</string>
+    <string name="service_channel_description">Keeps the dashboard rendered, the display awake and the Home Assistant link connected.</string>
+    <string name="service_notification_title">Aura Display is running</string>
+</resources>
